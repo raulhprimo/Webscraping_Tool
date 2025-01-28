@@ -252,20 +252,6 @@
                     <div id="author" class="video-author"></div>
                     <div id="title" class="video-title"></div>
                     <div id="description" class="video-description"></div>
-                    <div class="action-buttons">
-                        <button id="downloadButton" class="download-button" style="display: none;">
-                            <svg class="download-icon" viewBox="0 0 24 24">
-                                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-                            </svg>
-                            Download Vídeo
-                        </button>
-                        <button id="transcribeButton" class="transcribe-button" style="display: none;">
-                            <svg class="download-icon" viewBox="0 0 24 24">
-                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
-                            </svg>
-                            Transcrever Vídeo
-                        </button>
-                    </div>
                 </div>
             </div>
             <button class="toggle-raw-data" onclick="toggleRawData()">Mostrar Dados Brutos</button>
@@ -288,8 +274,6 @@
         const titleDiv = document.getElementById('title');
         const descriptionDiv = document.getElementById('description');
         const rawDataPre = document.getElementById('rawData');
-        const downloadButton = document.getElementById('downloadButton');
-        const transcribeButton = document.getElementById('transcribeButton');
         const transcriptionResult = document.getElementById('transcriptionResult');
         const transcriptionText = document.getElementById('transcriptionText');
         const segmentsContainer = document.getElementById('segmentsContainer');
@@ -308,62 +292,41 @@
                                     platform === 'tiktok' ? 'TikTok' : 'Facebook Reels';
         }
 
-        async function downloadVideo() {
+        async function downloadAndTranscribe(url, videoUrl) {
             try {
-                downloadButton.disabled = true;
-                downloadButton.textContent = 'Baixando...';
-
-                const response = await fetch(`/download?url=${encodeURIComponent(currentUrl)}&videoUrl=${encodeURIComponent(currentVideoUrl)}`);
+                console.log('Iniciando download e transcrição...');
                 
-                if (!response.ok) {
+                // Fazer download do vídeo
+                const downloadResponse = await fetch(`/download?url=${encodeURIComponent(url)}&videoUrl=${encodeURIComponent(videoUrl)}`);
+                if (!downloadResponse.ok) {
                     throw new Error('Erro ao baixar o vídeo');
                 }
-
-                // Criar um link temporário para download
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                const blob = await downloadResponse.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
+                a.href = downloadUrl;
                 a.download = `video_${Date.now()}.mp4`;
                 document.body.appendChild(a);
                 a.click();
-                window.URL.revokeObjectURL(url);
+                window.URL.revokeObjectURL(downloadUrl);
                 document.body.removeChild(a);
-            } catch (error) {
-                alert('Erro ao fazer download do vídeo: ' + error.message);
-            } finally {
-                downloadButton.disabled = false;
-                downloadButton.innerHTML = `
-                    <svg class="download-icon" viewBox="0 0 24 24">
-                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-                    </svg>
-                    Download Vídeo
-                `;
-            }
-        }
+                console.log('Download concluído');
 
-        async function transcribeVideo() {
-            try {
-                transcribeButton.disabled = true;
-                transcribeButton.textContent = 'Transcrevendo...';
-                transcriptionResult.style.display = 'none';
-
-                const response = await fetch('/transcribe', {
+                // Iniciar transcrição
+                console.log('Iniciando transcrição...');
+                const transcribeResponse = await fetch('/transcribe', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ 
-                        url: currentUrl,
-                        videoUrl: currentVideoUrl 
-                    })
+                    body: JSON.stringify({ url, videoUrl })
                 });
-                
-                if (!response.ok) {
+
+                if (!transcribeResponse.ok) {
                     throw new Error('Erro ao transcrever o vídeo');
                 }
 
-                const data = await response.json();
+                const data = await transcribeResponse.json();
                 
                 // Exibir texto completo
                 transcriptionText.textContent = data.text;
@@ -390,16 +353,11 @@
                 }
                 
                 transcriptionResult.style.display = 'block';
+                console.log('Transcrição concluída');
+
             } catch (error) {
-                alert('Erro ao transcrever o vídeo: ' + error.message);
-            } finally {
-                transcribeButton.disabled = false;
-                transcribeButton.innerHTML = `
-                    <svg class="download-icon" viewBox="0 0 24 24">
-                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
-                    </svg>
-                    Transcrever Vídeo
-                `;
+                console.error('Erro:', error);
+                alert('Erro ao processar o vídeo: ' + error.message);
             }
         }
 
@@ -416,7 +374,7 @@
             
             loading.style.display = 'block';
             resultDiv.style.display = 'none';
-            downloadButton.style.display = 'none';
+            transcriptionResult.style.display = 'none';
             
             try {
                 const response = await fetch('/scrape', {
@@ -443,16 +401,12 @@
                 // Mostrar dados brutos
                 rawDataPre.textContent = JSON.stringify(data, null, 2);
                 
-                // Configurar botões
+                // Se tiver URL do vídeo, iniciar download e transcrição
                 if (data.videoUrl && (data.platform === 'instagram' || data.platform === 'facebook' || data.platform === 'tiktok')) {
                     currentVideoUrl = data.videoUrl;
-                    downloadButton.style.display = 'flex';
-                    downloadButton.onclick = downloadVideo;
-                    transcribeButton.style.display = 'flex';
-                    transcribeButton.onclick = transcribeVideo;
-                } else {
-                    downloadButton.style.display = 'none';
-                    transcribeButton.style.display = 'none';
+                    resultDiv.style.display = 'block';
+                    // Iniciar download e transcrição em paralelo
+                    downloadAndTranscribe(currentUrl, currentVideoUrl);
                 }
                 
                 resultDiv.style.display = 'block';
