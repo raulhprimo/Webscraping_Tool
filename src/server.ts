@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import { promisify } from 'util';
 import puppeteer from 'puppeteer';
+import OpenAI from 'openai';
+import { createReadStream } from 'fs';
 
 const pipeline = promisify(require('stream').pipeline);
 
@@ -583,6 +585,94 @@ app.get('/download', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Erro ao fazer download:', error);
     res.status(500).json({ error: 'Erro ao fazer download do vídeo' });
+  }
+});
+
+// Configurar cliente OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+interface TranscriptionResult {
+  text: string;
+  segments?: {
+    start: number;
+    end: number;
+    text: string;
+  }[];
+}
+
+// Função para fazer download e transcrição do vídeo
+async function downloadAndTranscribe(videoUrl: string, platform: string): Promise<TranscriptionResult> {
+  try {
+    // Criar nome único para o arquivo
+    const timestamp = Date.now();
+    const videoPath = path.join(downloadsDir, `temp_video_${timestamp}.mp4`);
+    
+    // Download do vídeo
+    console.log('Iniciando download do vídeo...');
+    const response = await axios({
+      method: 'GET',
+      url: videoUrl,
+      responseType: 'stream',
+      headers: {
+        ...SOCIAL_HEADERS,
+        'Referer': platform === 'instagram' ? 'https://www.instagram.com/' : '',
+      }
+    });
+
+    // Salvar o vídeo localmente
+    await pipeline(response.data, fs.createWriteStream(videoPath));
+    console.log('Vídeo baixado com sucesso');
+
+    // Transcrever o vídeo usando o Whisper
+    console.log('Iniciando transcrição com Whisper...');
+    const transcription = await openai.audio.transcriptions.create({
+      file: createReadStream(videoPath),
+      model: "whisper-1",
+      language: "pt",
+      response_format: "verbose_json"
+    });
+
+    // Remover o arquivo temporário
+    fs.unlinkSync(videoPath);
+    console.log('Arquivo temporário removido');
+
+    return {
+      text: transcription.text,
+      segments: transcription.segments?.map(seg => ({
+        start: seg.start,
+        end: seg.end,
+        text: seg.text
+      }))
+    };
+
+  } catch (error) {
+    console.error('Erro na transcrição:', error);
+    throw new Error('Falha ao transcrever o vídeo');
+  }
+}
+
+// Novo endpoint para transcrição
+app.post('/transcribe', async (req: Request, res: Response) => {
+  try {
+    const { url, videoUrl } = req.body;
+    
+    if (!url || !videoUrl) {
+      return res.status(400).json({ error: 'URLs não fornecidas' });
+    }
+
+    const platform = detectPlatform(url);
+    if (!platform) {
+      return res.status(400).json({ error: 'Plataforma não suportada' });
+    }
+
+    const transcription = await downloadAndTranscribe(videoUrl, platform);
+    res.json(transcription);
+
+  } catch (error) {
+    console.error('Erro ao transcrever:', error);
+    res.status(500).json({ error: 'Erro ao transcrever o vídeo' });
   }
 });
 

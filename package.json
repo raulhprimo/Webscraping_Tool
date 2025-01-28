@@ -1,25 +1,26 @@
 {
-  "name": "instagram-reels-scraper",
+  "name": "social-media-video-scraper",
   "version": "1.0.0",
-  "description": "Scraper de metadados de Reels do Instagram",
+  "description": "Scraper para vídeos de redes sociais com transcrição",
   "main": "dist/server.js",
   "scripts": {
-    "start": "node dist/server.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc"
+    "start": "ts-node src/server.ts",
+    "build": "tsc",
+    "dev": "nodemon src/server.ts"
   },
   "dependencies": {
     "axios": "^1.6.2",
     "cheerio": "^1.0.0-rc.12",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "openai": "^4.24.1",
     "puppeteer": "^24.1.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "@types/node": "^20.10.0",
-    "@types/puppeteer": "^7.0.4",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.3.2"
+    "@types/node": "^20.10.4",
+    "nodemon": "^3.0.2",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.3"
   }
 }
