@@ -44,7 +44,29 @@ interface VideoMetadata {
   [key: string]: any;
 }
 
-const SOCIAL_HEADERS = {
+interface CustomHeaders {
+  'User-Agent': string;
+  'Accept': string;
+  'Accept-Language': string;
+  'Accept-Encoding': string;
+  'Cache-Control'?: string;
+  'Pragma'?: string;
+  'Sec-Ch-Ua'?: string;
+  'Sec-Ch-Ua-Mobile'?: string;
+  'Sec-Ch-Ua-Platform'?: string;
+  'Sec-Fetch-Dest'?: string;
+  'Sec-Fetch-Mode'?: string;
+  'Sec-Fetch-Site'?: string;
+  'Sec-Fetch-User'?: string;
+  'Upgrade-Insecure-Requests'?: string;
+  'Referer'?: string;
+  'Range'?: string;
+  'Connection'?: string;
+  'Host'?: string;
+  [key: string]: string | undefined;
+}
+
+const SOCIAL_HEADERS: CustomHeaders = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -411,7 +433,6 @@ async function scrapeTikTok($: cheerio.CheerioAPI, url: string, metadata: VideoM
       }
     });
 
-    // Se não encontrou a URL do vídeo, usar Puppeteer
     console.log('Iniciando Puppeteer para extrair URL do vídeo do TikTok...');
     const browser = await puppeteer.launch({
       headless: true,
@@ -419,7 +440,13 @@ async function scrapeTikTok($: cheerio.CheerioAPI, url: string, metadata: VideoM
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-zygote',
+        '--deterministic-fetch',
+        '--disable-gpu'
       ]
     });
     
@@ -434,76 +461,134 @@ async function scrapeTikTok($: cheerio.CheerioAPI, url: string, metadata: VideoM
       hasTouch: true
     });
 
+    // Headers específicos para TikTok
+    const TIKTOK_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-User': '?1'
+    };
+
+    await page.setExtraHTTPHeaders(TIKTOK_HEADERS);
+
     // Interceptar requisições de rede
     let videoUrl = '';
     await page.setRequestInterception(true);
 
     page.on('request', request => {
-      if (request.resourceType() === 'media') {
-        console.log('Requisição de mídia interceptada:', request.url());
-        const url = request.url();
-        if (url.includes('.mp4') || url.includes('/video/')) {
+      const url = request.url();
+      const resourceType = request.resourceType();
+      
+      // Bloquear recursos desnecessários
+      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+        request.abort();
+        return;
+      }
+
+      if (resourceType === 'media' || url.includes('.mp4') || url.includes('video/tos')) {
+        console.log('Requisição de mídia interceptada:', url);
+        if (!videoUrl) {
           videoUrl = url;
         }
       }
-      request.continue();
+      
+      // Modificar headers para cada requisição
+      const headers = {
+        ...request.headers(),
+        ...TIKTOK_HEADERS
+      };
+      
+      request.continue({ headers });
     });
 
-    // Configurar headers específicos para TikTok
-    await page.setExtraHTTPHeaders({
-      ...SOCIAL_HEADERS,
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1'
+    // Tratar erros de navegação
+    page.on('error', err => {
+      console.error('Erro na página:', err);
     });
 
-    // Navegar para a página
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+    // Tratar erros de console
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        console.log('Erro no console:', msg.text());
+      }
+    });
 
-    // Tentar diferentes seletores para o vídeo
-    const videoSelectors = [
-      'video[src]',
-      'video source[src]',
-      '[data-e2e="browse-video"] video',
-      '.video-player video',
-      '.tiktok-video video'
-    ];
+    try {
+      // Tentar navegar para a URL com retry
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries && !videoUrl) {
+        try {
+          console.log(`Tentativa ${retryCount + 1} de ${maxRetries}`);
+          
+          // Limpar cookies e cache
+          const client = await page.target().createCDPSession();
+          await client.send('Network.clearBrowserCookies');
+          await client.send('Network.clearBrowserCache');
+          
+          await page.goto(url, { 
+            waitUntil: 'networkidle0',
+            timeout: 30000
+          });
+          
+          // Aguardar um pouco para carregar o conteúdo dinâmico
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          if (!videoUrl) {
+            const pageContent = await page.content();
+            
+            // Tentar diferentes padrões de URLs de vídeo
+            const patterns = [
+              /"playAddr":"([^"]+)"/,
+              /"downloadAddr":"([^"]+)"/,
+              /"videoUrl":"([^"]+)"/,
+              /{"url":"([^"]+\.mp4[^"]*)"}/,
+              /<video[^>]+src="([^"]+)"/,
+              /\\"playAddr\\":\\"([^\\]+)\\"/
+            ];
 
-    for (const selector of videoSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
-        const foundVideoUrl = await page.evaluate((sel) => {
-          const videoElement = document.querySelector(sel);
-          return videoElement?.getAttribute('src') || 
-                 videoElement?.querySelector('source')?.getAttribute('src') ||
-                 videoElement?.getAttribute('data-src');
-        }, selector);
-        
-        if (foundVideoUrl) {
-          videoUrl = foundVideoUrl;
-          console.log('URL do vídeo encontrada via seletor:', selector);
-          break;
+            for (const pattern of patterns) {
+              const match = pageContent.match(pattern);
+              if (match && match[1]) {
+                videoUrl = match[1].replace(/\\/g, '');
+                break;
+              }
+            }
+          }
+          
+          if (videoUrl) break;
+          
+        } catch (navigationError) {
+          console.error(`Erro na tentativa ${retryCount + 1}:`, navigationError);
         }
-      } catch (e) {
-        console.log(`Seletor ${selector} não encontrado`);
+        
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+        }
       }
-    }
-
-    // Se ainda não encontrou, tentar extrair do HTML
-    if (!videoUrl) {
-      const pageContent = await page.content();
-      const videoMatches = pageContent.match(/"playAddr":"([^"]+)"|"downloadAddr":"([^"]+)"|"videoUrl":"([^"]+)"/);
-      if (videoMatches) {
-        videoUrl = videoMatches[1] || videoMatches[2] || videoMatches[3];
-        videoUrl = videoUrl.replace(/\\/g, '');
-        console.log('URL do vídeo encontrada no HTML');
-      }
+      
+    } catch (navigationError) {
+      console.error('Erro durante a navegação:', navigationError);
     }
 
     // Fechar o navegador
     await browser.close();
 
     if (videoUrl) {
+      // Decodificar a URL se necessário
+      videoUrl = decodeURIComponent(videoUrl);
       metadata.videoUrl = videoUrl;
       console.log('URL do vídeo do TikTok encontrada:', videoUrl);
+    } else {
+      console.log('Não foi possível encontrar a URL do vídeo');
     }
 
   } catch (error) {
@@ -557,18 +642,37 @@ app.get('/download', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Plataforma não suportada' });
     }
 
-    // Configurar headers para download
-    const headers = {
-      ...SOCIAL_HEADERS,
-      'Referer': platform === 'instagram' ? 'https://www.instagram.com/' : '',
+    // Configurar headers específicos para cada plataforma
+    let headers = {
+      ...SOCIAL_HEADERS
     };
 
+    if (platform === 'instagram') {
+      headers = {
+        ...headers,
+        'Referer': 'https://www.instagram.com/'
+      };
+    } else if (platform === 'tiktok') {
+      headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Range': 'bytes=0-',
+        'Referer': 'https://www.tiktok.com/',
+        'Connection': 'keep-alive'
+      };
+    }
+
     // Fazer o download do vídeo
+    console.log('Iniciando download com headers:', headers);
     const response = await axios({
       method: 'GET',
       url: videoUrl as string,
       responseType: 'stream',
-      headers
+      headers,
+      maxRedirects: 5,
+      validateStatus: (status) => status < 400
     });
 
     // Gerar nome do arquivo baseado na URL ou timestamp
