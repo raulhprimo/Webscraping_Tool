@@ -307,7 +307,7 @@
                 rawDataPre.textContent = JSON.stringify(data, null, 2);
                 
                 // Configurar botão de download
-                if (data.videoUrl && data.platform === 'instagram') {
+                if (data.videoUrl && (data.platform === 'instagram' || data.platform === 'facebook' || data.platform === 'tiktok')) {
                     currentVideoUrl = data.videoUrl;
                     downloadButton.style.display = 'flex';
                     downloadButton.onclick = downloadVideo;

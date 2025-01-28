@@ -128,64 +128,132 @@ app.post('/scrape', async (req: Request<{}, {}, ScrapeRequest>, res: Response) =
 
 async function scrapeFacebook(url: string, metadata: VideoMetadata): Promise<VideoMetadata> {
   try {
-    // Extrair ID do vídeo da URL
-    const videoId = extractFacebookVideoId(url);
-    if (!videoId) {
-      throw new Error('ID do vídeo não encontrado na URL');
-    }
-
-    // Usar a API do Graph do Facebook
-    const response = await axios.get(`https://graph.facebook.com/v18.0/${videoId}`, {
-      params: {
-        access_token: `${FB_APP_ID}|${FB_CLIENT_TOKEN}`,
-        fields: 'description,title,source,thumbnails,permalink_url,from'
+    // Primeiro tentar o método tradicional com meta tags
+    const response = await axios.get(url, {
+      headers: SOCIAL_HEADERS
+    });
+    
+    const $ = cheerio.load(response.data);
+    
+    // Coletar meta tags
+    $('meta').each((_, element) => {
+      const property = $(element).attr('property') || $(element).attr('name');
+      const content = $(element).attr('content');
+      
+      if (property && content) {
+        if (property === 'og:title') metadata.title = content;
+        if (property === 'og:description') metadata.description = content;
+        if (property === 'og:image') metadata.thumbnailUrl = content;
+        
+        // Coletar todas as meta tags relevantes
+        if (property.startsWith('og:') || property.startsWith('fb:')) {
+          metadata[property] = content;
+        }
       }
     });
 
-    const data = response.data;
-
-    metadata.title = data.title || '';
-    metadata.description = data.description || '';
-    metadata.thumbnailUrl = data.thumbnails?.data?.[0]?.uri || '';
-    metadata.videoUrl = data.source || '';
-    metadata.author = data.from?.name || '';
-    metadata.permalink = data.permalink_url || url;
-    metadata.rawData = data;
-
-    return metadata;
-  } catch (error) {
-    console.error('Erro ao acessar API do Facebook:', error);
+    // Se não encontrou a URL do vídeo, usar Puppeteer
+    console.log('Iniciando Puppeteer para extrair URL do vídeo do Facebook...');
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
+      ]
+    });
     
-    // Fallback para scraping direto se a API falhar
-    try {
-      const response = await axios.get(url, {
-        headers: SOCIAL_HEADERS
-      });
-      
-      const $ = cheerio.load(response.data);
-      
-      // Coletar meta tags
-      $('meta').each((_, element) => {
-        const property = $(element).attr('property') || $(element).attr('name');
-        const content = $(element).attr('content');
-        
-        if (property && content) {
-          if (property === 'og:title') metadata.title = content;
-          if (property === 'og:description') metadata.description = content;
-          if (property === 'og:image') metadata.thumbnailUrl = content;
-          
-          // Coletar todas as meta tags relevantes
-          if (property.startsWith('og:') || property.startsWith('fb:')) {
-            metadata[property] = content;
-          }
+    const page = await browser.newPage();
+    
+    // Configurar viewport para mobile
+    await page.setViewport({
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      isMobile: true,
+      hasTouch: true
+    });
+
+    // Interceptar requisições de rede
+    let videoUrl = '';
+    await page.setRequestInterception(true);
+
+    page.on('request', request => {
+      if (request.resourceType() === 'media') {
+        console.log('Requisição de mídia interceptada:', request.url());
+        const url = request.url();
+        if (url.includes('.mp4') || url.includes('/video/')) {
+          videoUrl = url;
         }
-      });
-    } catch (scrapingError) {
-      console.error('Erro no fallback de scraping:', scrapingError);
+      }
+      request.continue();
+    });
+
+    // Configurar headers específicos para Facebook
+    await page.setExtraHTTPHeaders({
+      ...SOCIAL_HEADERS,
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    });
+
+    // Navegar para a página
+    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+
+    // Tentar diferentes seletores para o vídeo
+    const videoSelectors = [
+      'video[src]',
+      'video source[src]',
+      '.x1lliihq video', // Classe específica do Facebook
+      '[data-video-id] video',
+      'video[data-video-id]',
+      '.x78zum5 video', // Outra classe do Facebook
+      '[role="presentation"] video'
+    ];
+
+    for (const selector of videoSelectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 5000 });
+        const foundVideoUrl = await page.evaluate((sel) => {
+          const videoElement = document.querySelector(sel);
+          return videoElement?.getAttribute('src') || 
+                 videoElement?.querySelector('source')?.getAttribute('src') ||
+                 videoElement?.getAttribute('data-url');
+        }, selector);
+        
+        if (foundVideoUrl) {
+          videoUrl = foundVideoUrl;
+          console.log('URL do vídeo encontrada via seletor:', selector);
+          break;
+        }
+      } catch (e) {
+        console.log(`Seletor ${selector} não encontrado`);
+      }
     }
-    
-    return metadata;
+
+    // Se ainda não encontrou, tentar extrair do HTML
+    if (!videoUrl) {
+      const pageContent = await page.content();
+      const videoMatches = pageContent.match(/["'](?:https?:\/\/[^"']*?\.(?:mp4|m3u8)[^"']*?)["']/i);
+      if (videoMatches) {
+        videoUrl = videoMatches[1];
+        console.log('URL do vídeo encontrada no HTML');
+      }
+    }
+
+    // Fechar o navegador
+    await browser.close();
+
+    if (videoUrl) {
+      metadata.videoUrl = videoUrl;
+      console.log('URL do vídeo do Facebook encontrada:', videoUrl);
+    }
+
+  } catch (error) {
+    console.error('Erro ao fazer scraping do Facebook:', error);
   }
+  
+  return metadata;
 }
 
 function extractFacebookVideoId(url: string): string | null {
@@ -258,8 +326,9 @@ async function scrapeInstagram($: cheerio.CheerioAPI, metadata: VideoMetadata, u
     page.on('request', request => {
       if (request.resourceType() === 'media') {
         console.log('Requisição de mídia interceptada:', request.url());
-        if (request.url().includes('.mp4')) {
-          videoUrl = request.url();
+        const url = request.url();
+        if (url.includes('.mp4') || url.includes('/video/')) {
+          videoUrl = url;
         }
       }
       request.continue();
@@ -325,83 +394,120 @@ async function scrapeInstagram($: cheerio.CheerioAPI, metadata: VideoMetadata, u
   return metadata;
 }
 
-async function scrapeTikTok($: cheerio.CheerioAPI, url: string, metadata: VideoMetadata, rawHtml: string): Promise<VideoMetadata> {
-  // 1. Tentar extrair dados do script #SIGI_STATE
-  const sigiStateMatch = rawHtml.match(/<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/);
-  if (sigiStateMatch && sigiStateMatch[1]) {
-    try {
-      const data = JSON.parse(sigiStateMatch[1]);
-      const videoData = data?.ItemModule?.[Object.keys(data.ItemModule)[0]];
-      
-      if (videoData) {
-        metadata.title = videoData.desc || metadata.title;
-        metadata.description = videoData.desc || metadata.description;
-        metadata.thumbnailUrl = videoData.video?.cover || videoData.video?.dynamicCover || metadata.thumbnailUrl;
-        metadata.author = videoData.author;
-        metadata.stats = {
-          plays: videoData.stats?.playCount,
-          likes: videoData.stats?.diggCount,
-          shares: videoData.stats?.shareCount,
-          comments: videoData.stats?.commentCount
-        };
-        metadata.rawData = videoData;
-      }
-    } catch (e) {
-      console.log('Erro ao parsear SIGI_STATE:', e);
-    }
-  }
-
-  // 2. Tentar extrair das meta tags se ainda não tiver os dados
-  if (!metadata.thumbnailUrl || !metadata.title) {
+async function scrapeTikTok($: cheerio.CheerioAPI, url: string, metadata: VideoMetadata, html: string): Promise<VideoMetadata> {
+  try {
+    // Primeiro tentar o método tradicional com meta tags
     $('meta').each((_, element) => {
       const property = $(element).attr('property') || $(element).attr('name');
       const content = $(element).attr('content');
       
       if (property && content) {
-        if (!metadata.title && property === 'og:title') metadata.title = content;
-        if (!metadata.description && property === 'og:description') metadata.description = content;
-        if (!metadata.thumbnailUrl && property === 'og:image') metadata.thumbnailUrl = content;
-        if (!metadata.thumbnailUrl && property === 'og:video:thumbnail') metadata.thumbnailUrl = content;
-        
-        // Coletar todas as meta tags relevantes
-        if (property.startsWith('og:') || property.startsWith('twitter:') || property.startsWith('tiktok:')) {
-          metadata[property] = content;
-        }
+        metadata[property] = content;
+        if (property === 'og:title') metadata.title = content;
+        if (property === 'og:description') metadata.description = content;
+        if (property === 'og:image') metadata.thumbnailUrl = content;
       }
     });
-  }
 
-  // 3. Tentar extrair do elemento de vídeo
-  if (!metadata.thumbnailUrl) {
-    const posterUrl = $('video').attr('poster');
-    if (posterUrl) {
-      metadata.thumbnailUrl = posterUrl;
-    }
-  }
+    // Se não encontrou a URL do vídeo, usar Puppeteer
+    console.log('Iniciando Puppeteer para extrair URL do vídeo do TikTok...');
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
+      ]
+    });
+    
+    const page = await browser.newPage();
+    
+    // Configurar viewport para mobile
+    await page.setViewport({
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      isMobile: true,
+      hasTouch: true
+    });
 
-  // 4. Extrair dados do script __UNIVERSAL_DATA_FOR_REHYDRATION__
-  const universalDataMatch = rawHtml.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/);
-  if (universalDataMatch && universalDataMatch[1]) {
-    try {
-      const universalData = JSON.parse(universalDataMatch[1]);
-      const videoData = universalData?.['__DEFAULT_SCOPE__']?.['webapp.video-detail']?.itemInfo?.itemStruct;
-      
-      if (videoData) {
-        metadata.title = metadata.title || videoData.desc;
-        metadata.description = metadata.description || videoData.desc;
-        metadata.thumbnailUrl = metadata.thumbnailUrl || videoData.video?.cover;
-        metadata.stats = metadata.stats || {
-          plays: videoData.stats?.playCount,
-          likes: videoData.stats?.diggCount,
-          shares: videoData.stats?.shareCount,
-          comments: videoData.stats?.commentCount
-        };
+    // Interceptar requisições de rede
+    let videoUrl = '';
+    await page.setRequestInterception(true);
+
+    page.on('request', request => {
+      if (request.resourceType() === 'media') {
+        console.log('Requisição de mídia interceptada:', request.url());
+        const url = request.url();
+        if (url.includes('.mp4') || url.includes('/video/')) {
+          videoUrl = url;
+        }
       }
-    } catch (e) {
-      console.log('Erro ao parsear UNIVERSAL_DATA:', e);
-    }
-  }
+      request.continue();
+    });
 
+    // Configurar headers específicos para TikTok
+    await page.setExtraHTTPHeaders({
+      ...SOCIAL_HEADERS,
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1'
+    });
+
+    // Navegar para a página
+    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+
+    // Tentar diferentes seletores para o vídeo
+    const videoSelectors = [
+      'video[src]',
+      'video source[src]',
+      '[data-e2e="browse-video"] video',
+      '.video-player video',
+      '.tiktok-video video'
+    ];
+
+    for (const selector of videoSelectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 5000 });
+        const foundVideoUrl = await page.evaluate((sel) => {
+          const videoElement = document.querySelector(sel);
+          return videoElement?.getAttribute('src') || 
+                 videoElement?.querySelector('source')?.getAttribute('src') ||
+                 videoElement?.getAttribute('data-src');
+        }, selector);
+        
+        if (foundVideoUrl) {
+          videoUrl = foundVideoUrl;
+          console.log('URL do vídeo encontrada via seletor:', selector);
+          break;
+        }
+      } catch (e) {
+        console.log(`Seletor ${selector} não encontrado`);
+      }
+    }
+
+    // Se ainda não encontrou, tentar extrair do HTML
+    if (!videoUrl) {
+      const pageContent = await page.content();
+      const videoMatches = pageContent.match(/"playAddr":"([^"]+)"|"downloadAddr":"([^"]+)"|"videoUrl":"([^"]+)"/);
+      if (videoMatches) {
+        videoUrl = videoMatches[1] || videoMatches[2] || videoMatches[3];
+        videoUrl = videoUrl.replace(/\\/g, '');
+        console.log('URL do vídeo encontrada no HTML');
+      }
+    }
+
+    // Fechar o navegador
+    await browser.close();
+
+    if (videoUrl) {
+      metadata.videoUrl = videoUrl;
+      console.log('URL do vídeo do TikTok encontrada:', videoUrl);
+    }
+
+  } catch (error) {
+    console.error('Erro ao fazer scraping do TikTok:', error);
+  }
+  
   return metadata;
 }
 
