@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Media Video Scraper</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        input[type="url"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #0095f6;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #0081d6;
+        }
+        #result {
+            margin-top: 20px;
+            display: none;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .video-preview {
+            margin: 20px auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: white;
+            max-width: 400px;
+        }
+        .thumbnail-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 177.78%;
+            background-color: #000;
+        }
+        .video-thumbnail {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .video-info {
+            padding: 15px;
+        }
+        .platform-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .platform-instagram {
+            background-color: #E1306C;
+            color: white;
+        }
+        .platform-tiktok {
+            background-color: #000000;
+            color: white;
+        }
+        .platform-facebook {
+            background-color: #1877F2;
+            color: white;
+        }
+        .video-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #262626;
+        }
+        .video-description {
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 10px;
+            white-space: pre-wrap;
+        }
+        .video-author {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .raw-data {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+        }
+        .toggle-raw-data {
+            background-color: #eee;
+            color: #666;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 10px;
+            width: auto;
+        }
+        @media (max-width: 600px) {
+            .video-preview {
+                max-width: 100%;
+            }
+        }
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            justify-content: center;
+        }
+        
+        .download-button {
+            background-color: #22c55e;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .download-button:hover {
+            background-color: #16a34a;
+        }
+        
+        .download-button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        
+        .download-icon {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Social Media Video Scraper</h1>
+        <form id="scraperForm">
+            <div class="form-group">
+                <input type="url" id="videoUrl" name="videoUrl" placeholder="Cole a URL do Instagram Reels, TikTok ou Facebook Reels aqui" required>
+            </div>
+            <button type="submit">Obter Metadados</button>
+        </form>
+        <div class="loading" id="loading">Carregando...</div>
+        <div id="result">
+            <div class="video-preview">
+                <div class="thumbnail-container">
+                    <img id="thumbnail" class="video-thumbnail" src="" alt="Thumbnail do vídeo">
+                </div>
+                <div class="video-info">
+                    <div id="platform" class="platform-badge"></div>
+                    <div id="author" class="video-author"></div>
+                    <div id="title" class="video-title"></div>
+                    <div id="description" class="video-description"></div>
+                    <div class="action-buttons">
+                        <button id="downloadButton" class="download-button" style="display: none;">
+                            <svg class="download-icon" viewBox="0 0 24 24">
+                                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                            </svg>
+                            Download Vídeo
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <button class="toggle-raw-data" onclick="toggleRawData()">Mostrar Dados Brutos</button>
+            <pre class="raw-data" id="rawData"></pre>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('scraperForm');
+        const loading = document.getElementById('loading');
+        const resultDiv = document.getElementById('result');
+        const thumbnailImg = document.getElementById('thumbnail');
+        const platformDiv = document.getElementById('platform');
+        const authorDiv = document.getElementById('author');
+        const titleDiv = document.getElementById('title');
+        const descriptionDiv = document.getElementById('description');
+        const rawDataPre = document.getElementById('rawData');
+        const downloadButton = document.getElementById('downloadButton');
+
+        let currentVideoUrl = '';
+        let currentUrl = '';
+
+        function toggleRawData() {
+            const rawData = document.getElementById('rawData');
+            rawData.style.display = rawData.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function setPlatformBadge(platform) {
+            platformDiv.className = `platform-badge platform-${platform}`;
+            platformDiv.textContent = platform === 'instagram' ? 'Instagram Reels' : 
+                                    platform === 'tiktok' ? 'TikTok' : 'Facebook Reels';
+        }
+
+        async function downloadVideo() {
+            try {
+                downloadButton.disabled = true;
+                downloadButton.textContent = 'Baixando...';
+
+                const response = await fetch(`/download?url=${encodeURIComponent(currentUrl)}&videoUrl=${encodeURIComponent(currentVideoUrl)}`);
+                
+                if (!response.ok) {
+                    throw new Error('Erro ao baixar o vídeo');
+                }
+
+                // Criar um link temporário para download
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `video_${Date.now()}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } catch (error) {
+                alert('Erro ao fazer download do vídeo: ' + error.message);
+            } finally {
+                downloadButton.disabled = false;
+                downloadButton.innerHTML = `
+                    <svg class="download-icon" viewBox="0 0 24 24">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                    </svg>
+                    Download Vídeo
+                `;
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const url = document.getElementById('videoUrl').value;
+            currentUrl = url;
+            
+            loading.style.display = 'block';
+            resultDiv.style.display = 'none';
+            downloadButton.style.display = 'none';
+            
+            try {
+                const response = await fetch('/scrape', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url })
+                });
+                
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                // Atualizar a visualização
+                thumbnailImg.src = data.thumbnailUrl || '';
+                setPlatformBadge(data.platform);
+                authorDiv.textContent = data.author || '';
+                titleDiv.textContent = data.title || '';
+                descriptionDiv.textContent = data.description || '';
+                
+                // Mostrar dados brutos
+                rawDataPre.textContent = JSON.stringify(data, null, 2);
+                
+                // Configurar botão de download
+                if (data.videoUrl && data.platform === 'instagram') {
+                    currentVideoUrl = data.videoUrl;
+                    downloadButton.style.display = 'flex';
+                    downloadButton.onclick = downloadVideo;
+                } else {
+                    downloadButton.style.display = 'none';
+                }
+                
+                resultDiv.style.display = 'block';
+            } catch (error) {
+                resultDiv.style.display = 'block';
+                resultDiv.innerHTML = `<div style="color: red; padding: 10px;">Erro: ${error.message}</div>`;
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html> 
